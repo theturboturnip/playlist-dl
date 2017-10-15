@@ -1,0 +1,4 @@
+*.py~
+#*#
+/output/
+/temp/
