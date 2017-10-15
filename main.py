@@ -4,6 +4,14 @@ import subprocess,json,sys,os,re,shutil
 path = os.path.dirname(os.path.abspath(sys.argv[0]))
 nullfile = open(os.devnull, "w")
 
+youtube_dl = "youtube-dl"
+ffmpeg = "ffmpeg"
+ffprobe = "ffprobe"
+if "--local-cmds" in sys.argv:
+    youtube_dl = "./exec/youtube-dl"
+    ffmpeg = "./exec/ffmpeg"
+    ffprobe = "./exec/ffprobe"
+    
 def call(args):
     subprocess.call(args, stdout=nullfile, stderr=nullfile)
 
@@ -31,7 +39,7 @@ def files_in(*args):
     return to_return
 
 def get_file_metadata(path):
-    output = subprocess.check_output(["ffprobe","-i",path,"-loglevel","error","-show_entries","format_tags=title,comment","-of","default=noprint_wrappers=1:nokey=1"],stderr=subprocess.STDOUT).decode(sys.stdout.encoding).split("\n")
+    output = subprocess.check_output([ffprobe,"-i",path,"-loglevel","error","-show_entries","format_tags=title,comment","-of","default=noprint_wrappers=1:nokey=1"],stderr=subprocess.STDOUT).decode(sys.stdout.encoding).split("\n")
     return output
     
 def get_dl_title_from_title(video_title):
@@ -47,15 +55,15 @@ def download_video(video, output_folder_name, make_mono = False):
     dl_output_file = os.path.join(path,"temp",video["title"]+".%(ext)s")
     print "Downloading",video["title"],"to",dl_output_file
 
-    call(["youtube-dl","-x","--audio-format","mp3","-o",dl_output_file,"--prefer-ffmpeg", "https://youtube.com/watch?v="+video["id"]])
+    call([youtube_dl,"-x","--audio-format","mp3","-o",dl_output_file,"--prefer-ffmpeg","--ffmpeg-location",ffmpeg, "https://youtube.com/watch?v="+video["id"]])
 
     #normalize
     vol_regex = re.compile(r"mean_volume: (-?[0-9]+.[0-9]+) dB")
-    gain = -25.0/float(vol_regex.search(subprocess.check_output(["ffmpeg","-i",dl_output_file.replace("%(ext)s","mp3"),"-af","volumedetect","-vn","-sn","-dn","-f","null","/dev/null"],stderr=subprocess.STDOUT).decode(sys.stdout.encoding)).group(1))
+    gain = -25.0/float(vol_regex.search(subprocess.check_output([ffmpeg,"-i",dl_output_file.replace("%(ext)s","mp3"),"-af","volumedetect","-vn","-sn","-dn","-f","null",os.devnull],stderr=subprocess.STDOUT).decode(sys.stdout.encoding)).group(1))
 
     output_file = os.path.join(path,"output",output_folder_name,title+".mp3")
     # Use ffmpeg to convert the temp file to the real thing
-    cmd  = ["ffmpeg", "-i", dl_output_file.replace("%(ext)s","mp3"), "-f", "lavfi", "-i", "aevalsrc=0|0:d=2"] # Specify input file and silence source
+    cmd  = [ffmpeg, "-i", dl_output_file.replace("%(ext)s","mp3"), "-f", "lavfi", "-i", "aevalsrc=0|0:d=2"] # Specify input file and silence source
     cmd += ["-filter_complex", "[0:0]silenceremove=1:0:-50dB:1:1:-50dB[start];[start] [1:0] concat=n=2:v=0:a=1[middle];[middle]volume="+("%.2f" % gain)+"dB[out]"] # Apply a filter which, in order: strips silence from either side of the source, concatenates the result with the silence, applies a gain to normalize the mean volume to -25dB.
     if make_mono:
         cmd += ["-ac","1"] # Make channels = 1
@@ -67,7 +75,7 @@ def download_video(video, output_folder_name, make_mono = False):
     call(cmd)
     
 def get_videos_for_playlist(playlistId):
-    json_str = '{"videos":['+subprocess.check_output(["youtube-dl","-j","--flat-playlist","https://www.youtube.com/playlist?list="+playlistId]).replace("\n",",")[0:-1]+"]}"
+    json_str = '{"videos":['+subprocess.check_output([youtube_dl,"-j","--flat-playlist","https://www.youtube.com/playlist?list="+playlistId]).replace("\n",",")[0:-1]+"]}"
     json_array = json.loads(json_str)["videos"]
     ids=[]
     for video in json_array:
