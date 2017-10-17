@@ -26,14 +26,27 @@ def require_args(arg_count):
         exit(1)
 
 def clean_up():
+    print "Quitting..."
     shutil.rmtree(os.path.join(path,"temp"))
     quit()
+
+def get_input(message, boolean = False):
+    if (boolean):
+        message += " y/*/q: "
+    else:
+        message += " (q to quit): "
+    reply = raw_input(message).strip()
+    if reply.lower() == "q":
+        clean_up()
+    elif boolean:
+        return reply.lower() == "y"
+    return reply
         
 def create_dir(*args):
     to_create = os.path.join(*args)
-    print to_create
     if not os.path.exists(to_create):
         os.makedirs(to_create)
+    return to_create
         
 def files_in(*args):
     folder_path = os.path.join(*args)
@@ -52,7 +65,7 @@ def get_dl_title_from_title(video):
         return dl_titles[video["id"]]
     if ("dl_title" in video):
         return video["dl_title"]
-    dl_title = raw_input("Title for '"+video["title"].encode("utf8")+"'?: ")
+    dl_title = get_input("Title for '"+video["title"].encode("utf8")+"'?")
     if dl_title.strip().lower() == "quit":
         clean_up()
     if dl_title.strip() == "":
@@ -61,27 +74,35 @@ def get_dl_title_from_title(video):
     dl_titles[video["id"]] = dl_title.strip()
     return dl_title.strip()
 
-def download_video(video, output_folder_name, make_mono = False):
+def download_video(video, output_folder, make_mono = False):
     title=video["dl_title"]
     dl_output_file = os.path.join(path,"temp",video["title"]+".%(ext)s")
-    print "Downloading",video["title"],"to",dl_output_file
+    print "Downloading",video["dl_title"]#,"to",dl_output_file
 
     call([youtube_dl,"-x","--audio-format","mp3","-o",dl_output_file,"--prefer-ffmpeg","--ffmpeg-location",ffmpeg, "https://youtube.com/watch?v="+video["id"]])
 
     vol_regex = re.compile(r"mean_volume: (-?[0-9]+.[0-9]+) dB")
     gain = -25.0/float(vol_regex.search(subprocess.check_output([ffmpeg,"-i",dl_output_file.replace("%(ext)s","mp3"),"-af","volumedetect","-vn","-sn","-dn","-f","null",os.devnull],stderr=subprocess.STDOUT).decode(sys.stdout.encoding)).group(1))
 
-    output_file = os.path.join(path,"output",output_folder_name,title+".mp3")
+    output_file = os.path.join(output_folder, title+".mp3")
     # Use ffmpeg to convert the temp file to the real thing
-    cmd  = [ffmpeg, "-i", dl_output_file.replace("%(ext)s","mp3"), "-f", "lavfi", "-i", "aevalsrc=0|0:d=2", "-y"] # Specify input file and silence source
-    cmd += ["-filter_complex", "[0:0]silenceremove=1:0:-50dB:1:1:-50dB[start];[start] [1:0] concat=n=2:v=0:a=1[middle];[middle]volume="+("%.2f" % gain)+"dB[out]"] # Apply a filter which, in order: strips silence from either side of the source, concatenates the result with the silence, applies a gain to normalize the mean volume to -25dB.
+    cmd  = [ffmpeg, "-i", dl_output_file.replace("%(ext)s","mp3"), "-f", "lavfi", "-i", "aevalsrc=0|0:d=5", "-y"] # Specify input file and silence source
+
+    filter_cmd = "[0:0]silenceremove=1:0:-50dB:1:1:-50dB[start];[start] [1:0] concat=n=2:v=0:a=1[middle];[middle]"
+    if "--legacy-norm" in sys.argv:
+        filter_cmd += "volume="+("%.2f" % gain)
+    else:
+        filter_cmd += "loudnorm"
+    filter_cmd += "[out]"
+    
+    cmd += ["-filter_complex", filter_cmd] # Apply a filter which, in order: strips silence from either side of the source, concatenates the result with the silence, normalizes the volume.
     if make_mono:
         cmd += ["-ac","1"] # Make channels = 1
     cmd += ["-metadata", "artist=Shoji Meguro","-metadata","album=Persona"+(" [Mono]" if make_mono else ""),"-metadata","comment="+video["id"],"-metadata","title="+title] # Apply metadata
     cmd += ["-map", "[out]", output_file] # Specify output path
 
     #print subprocess.list2cmdline(cmd)
-    print "Converting from "+dl_output_file+" to "+output_file
+    print "Converting "+video["dl_title"] #"Converting from "+dl_output_file+" to "+output_file
     call(cmd)
     
 def get_videos_for_playlist(playlistId):
@@ -90,21 +111,30 @@ def get_videos_for_playlist(playlistId):
     ids=[]
     for video in json_array:
         ids.append(video["id"])
-    return json_array, ids #PLpc_f2Kxcy9VcT6VNSekSgo7DG6lchSqB
+    return json_array, ids
 
-def update_files_for_playlist(videos,ids,folder_name):
-    current_files = files_in(path,"output",folder_name)
+def handle_folder(folder):
+    current_files = files_in(folder)
     current_videos = []
     for f in current_files:
-        if os.path.splitext(f)[1] != ".mp3":
-            if raw_input("Non-mp3 detected! Remove file at path "+f+"? :") == "y":
+        ext = os.path.splitext(f)[1]
+        if ext != ".mp3":
+            if ext == "":
+                continue
+            if get_input("Non-mp3 detected! Remove file at path "+f+"?", True):
                 os.remove(f)
         else:
             metadata = get_file_metadata(f)
-            if metadata[1] not in ids and raw_input("Remove file at path "+f+"? :") == "y":
+            if metadata[1] not in ids and get_input("File not in playlist! Remove file at path "+f+"?", True):
                 os.remove(f)
+            elif metadata[0] != os.path.splitext(os.path.basename(f))[0] and get_input("Incorrect name detected for "+metadata[0]+"! Correct?", True):
+                os.rename(f, os.path.join(folder,metadata[0]+".mp3"))
             else:
                 current_videos.append(metadata)
+    return current_videos
+
+def update_files_for_playlist(videos,ids,output_path):
+    current_videos = handle_folder(output_path)
     to_download = []
     i = 0
     for v in videos:
@@ -113,24 +143,40 @@ def update_files_for_playlist(videos,ids,folder_name):
         except ValueError:
             index_of_v = -1
         if index_of_v == -1:
-            to_download.append(i)
             v["dl_title"] = get_dl_title_from_title(v)
         else:
             v["dl_title"] = current_videos[index_of_v][0]
+        if "--redownload" in sys.argv or index_of_v == -1:
+            to_download.append(i)
         i += 1
+    
     for i in to_download:
-        download_video(videos[i], folder_name, folder_name=="mono")
+        download_video(videos[i], output_path)
+        print str(i+1)+" of "+str(len(videos))+" downloaded!"
+
+def convert_videos_to_mono(normalized_output, mono_output):
+    handle_folder(mono_output)
+    normalized_files = files_in(normalized_output)
+    for f in normalized_files:
+        if os.path.splitext(f)[1] == "":
+            continue
+        mono_filename = os.path.join(mono_output, os.path.basename(f))
+        if not os.path.exists(mono_filename) or "--remono" in sys.argv:
+            print "Monoizing "+f
+            call([ffmpeg, "-i", f, "-ac", "1", "-y", mono_filename])
     
 
 require_args(0)
-videos, ids = get_videos_for_playlist("PLpc_f2Kxcy9VcT6VNSekSgo7DG6lchSqB")
+playlist_id = "PLpc_f2Kxcy9VcT6VNSekSgo7DG6lchSqB"
+videos, ids = get_videos_for_playlist(playlist_id)
 
 create_dir(path,"output")
+create_dir(path,"output",playlist_id)
 create_dir(path,"temp")
-create_dir(path,"output","normalized")
-create_dir(path,"output","mono")
+normalized_output = create_dir(path,"output",playlist_id,"normalized")
+mono_output = create_dir(path,"output",playlist_id,"mono")
 
-update_files_for_playlist(videos, ids, "normalized")
-update_files_for_playlist(videos, ids, "mono")
+update_files_for_playlist(videos, ids, normalized_output)
+convert_videos_to_mono(normalized_output, mono_output)
 
 clean_up()
