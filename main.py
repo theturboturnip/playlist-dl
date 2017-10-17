@@ -74,7 +74,7 @@ def get_dl_title_from_title(video):
     dl_titles[video["id"]] = dl_title.strip()
     return dl_title.strip()
 
-def download_video(video, output_folder, make_mono = False):
+def download_video(video, output_folder):
     title=video["dl_title"]
     dl_output_file = os.path.join(path,"temp",video["title"]+".%(ext)s")
     print "Downloading",video["dl_title"]#,"to",dl_output_file
@@ -96,8 +96,6 @@ def download_video(video, output_folder, make_mono = False):
     filter_cmd += "[out]"
     
     cmd += ["-filter_complex", filter_cmd] # Apply a filter which, in order: strips silence from either side of the source, concatenates the result with the silence, normalizes the volume.
-    if make_mono:
-        cmd += ["-ac","1"] # Make channels = 1
     cmd += ["-metadata", "artist=Shoji Meguro","-metadata","album=Persona"+(" [Mono]" if make_mono else ""),"-metadata","comment="+video["id"],"-metadata","title="+title] # Apply metadata
     cmd += ["-map", "[out]", output_file] # Specify output path
 
