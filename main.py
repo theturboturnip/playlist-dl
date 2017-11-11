@@ -16,7 +16,9 @@ artist = "Shoji Meguro"
 album = "Persona"
 
 dl_titles={}
-    
+
+target_volume = -12.0
+
 def call(args):
     if "--debug-cmds" in sys.argv:
         subprocess.call(args)
@@ -85,7 +87,7 @@ def download_video(video, output_folder, downloads_dir):
         call([youtube_dl,"-x","--audio-format","mp3","-o",dl_output_file,"--prefer-ffmpeg","--ffmpeg-location",ffmpeg, "https://youtube.com/watch?v="+video["id"]])
 
     vol_regex = re.compile(r"mean_volume: (-?[0-9]+.[0-9]+) dB")
-    gain = -25.0/float(vol_regex.search(subprocess.check_output([ffmpeg,"-i",dl_output_file.replace("%(ext)s","mp3"),"-af","volumedetect","-vn","-sn","-dn","-f","null",os.devnull],stderr=subprocess.STDOUT).decode(sys.stdout.encoding)).group(1))
+    gain = target_volume - float(vol_regex.search(subprocess.check_output([ffmpeg,"-i",dl_output_file.replace("%(ext)s","mp3"),"-af","volumedetect","-vn","-sn","-dn","-f","null",os.devnull],stderr=subprocess.STDOUT).decode(sys.stdout.encoding)).group(1))
 
     output_file = os.path.join(output_folder, title+".mp3")
     # Use ffmpeg to convert the temp file to the real thing
@@ -93,7 +95,7 @@ def download_video(video, output_folder, downloads_dir):
 
     filter_cmd = "[0:0]silenceremove=1:0:-50dB:1:1:-50dB[start];[start] [1:0] concat=n=2:v=0:a=1[middle];[middle]"
     if "--legacy-norm" in sys.argv:
-        filter_cmd += "volume="+("%.2f" % gain)
+        filter_cmd += "volume="+str(gain)+"dB"
     else:
         filter_cmd += "loudnorm=i=-5.0"
     filter_cmd += "[out]"
@@ -168,6 +170,8 @@ def convert_videos_to_mono(normalized_output, mono_output):
 
 require_args(0)
 playlist_id = "PLpc_f2Kxcy9VcT6VNSekSgo7DG6lchSqB"
+if sys.argv[1][0] != '-':
+    playlist_id = sys.argv[1]
 videos, ids = get_videos_for_playlist(playlist_id)
 
 create_dir(path,"output")
