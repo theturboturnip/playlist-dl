@@ -114,8 +114,6 @@ class PlaylistDownloader:
         if id not in self.metadata:
             video_name = None
             for video in self.videos:
-                print video["id"]
-                print id
                 if video["id"] == id:
                     video_name = video["title"].encode("utf-8")
                     break
@@ -250,6 +248,7 @@ class PlaylistDownloader:
             #print "\r"+message+' '*(length+100)
         if max_amount == 0:
             max_amount = 1
+            amount = 1
         percent = ("{0:.1f}").format(100 * (amount / float(max_amount)))
         filled_length = int(length * amount // max_amount)
         bar = fill * filled_length + '-' * (length - filled_length)
@@ -304,26 +303,39 @@ class PlaylistDownloader:
         for id in self.playlist_ids:
             self.get_metadata(id)
         self.save_metadata()
+        
+        downloaded_videos = 0
+        if not self.debug:
+            print ""
+            self.update_progress_bar("Downloaded", downloaded_videos, len(self.to_download), "Downloading...")
         for id in self.to_download:
             self.download_video(id)
+            downloaded_videos += 1
+            if not self.debug:
+                self.update_progress_bar("Downloaded", downloaded_videos, len(self.to_download), self.get_metadata(id)[u"title"])
+            
         normalized_videos = 0
         if not self.debug:
+            print ""
             self.update_progress_bar("Normalized", normalized_videos, len(self.to_normalize), "Normalizing...")
         for id in self.to_normalize:
             self.normalize_video(id)
             normalized_videos += 1
             if not self.debug:
                 self.update_progress_bar("Normalized", normalized_videos, len(self.to_normalize), self.get_metadata(id)[u"title"])
+
         monoized_videos = 0
         if not self.debug:
             print ""
-            self.update_progress_bar("Monoized", monoized_videos, len(self.to_monoize), "Monoizing...")
+            self.update_progress_bar("  Monoized", monoized_videos, len(self.to_monoize), "Monoizing...")
         for id in self.to_monoize:
             self.monoize_video(id)
             monoized_videos += 1
             if not self.debug:
-                self.update_progress_bar("Monoized", monoized_videos, len(self.to_monoize), self.get_metadata(id)[u"title"])
-
+                self.update_progress_bar("  Monoized", monoized_videos, len(self.to_monoize), self.get_metadata(id)[u"title"])
+        if not self.debug:
+            print ""
+                
         self.clean_up()
 
     def clean_up(self):
