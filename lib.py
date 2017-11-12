@@ -153,6 +153,8 @@ class PlaylistDownloader:
         for f in self.files_in(self.downloads_folder):
             filename = os.path.split(f)[1]
             id, ext = os.path.splitext(filename)
+            if id[0] == '.':
+                continue
             if (len(id) != 11):
                 self.delete_file(f, "Invalid ID")
             elif ext != ".mp3":
@@ -165,6 +167,8 @@ class PlaylistDownloader:
         for f in self.files_in(self.normalized_folder):
             filename = os.path.split(f)[1]
             name, ext = os.path.splitext(filename)
+            if name[0] == '.':
+                continue
             id, metadata = self.get_mp3_metadata(f)
             if id not in self.playlist_ids:
                 self.delete_file(f, "Not in playlist")
@@ -182,6 +186,8 @@ class PlaylistDownloader:
         for f in self.files_in(self.monoized_folder):
             filename = os.path.split(f)[1]
             name, ext = os.path.splitext(filename)
+            if name[0] == '.':
+                continue
             id, metadata = self.get_mp3_metadata(f)
             if id not in self.playlist_ids:
                 self.delete_file(f, "Not in playlist")
