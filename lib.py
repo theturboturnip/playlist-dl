@@ -233,7 +233,7 @@ class PlaylistDownloader:
         cmd = [self.ffmpeg, "-i", in_path, "-b:a", "256k", "-ac", "1", "-y"]
 
         cmd += ["-map_metadata", "0"]
-        cmd += ["-metadata", "album="+video_metadata[u"album"]]
+        cmd += ["-metadata", "album="+video_metadata[u"album"]+" [Mono]"]
         out_path = os.path.join(self.monoized_folder, video_metadata[u"title"]+".mp3")
         cmd += [out_path]
 

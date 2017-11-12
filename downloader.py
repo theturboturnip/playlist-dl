@@ -10,7 +10,7 @@ parser.add_argument("output_folder", help="The folder to download the playlist t
 parser.add_argument("--ffmpeg-location", type=str, help="Location of the ffmpeg executable.", default="ffmpeg")
 parser.add_argument("--ffprobe-location", type=str, help="Location of the ffprobe executable.", default="ffprobe")
 parser.add_argument("--youtube-dl-location", type=str, help="Location of the youtube-dl executable", default="youtube-dl")
-parser.add_argument("--local-cmds", action="store_true", help="Equivalent to --ffmpeg-location ./exec/ffmpeg --youtube-dl-location ./exec/youtube-dl")
+parser.add_argument("--local-cmds", action="store_true", help="Equivalent to --ffmpeg-location ./exec/ffmpeg --ffprobe-location ./exec/ffprobe --youtube-dl-location ./exec/youtube-dl")
 
 action_choices = ["NONE", "ALL", "NEW"]
 parser.add_argument("--download", choices=action_choices, help="Which videos to download from Youtube. Newly downloaded videos will automatically be normalized unless --normalize is NONE, and these videos will be monoized unless --monoize is NONE.", default="NEW")
@@ -29,6 +29,8 @@ args = vars(parser.parse_args())
 playlist = args["playlist"]
 output_folders = [args["downloads_folder"], args["output_folder"]]
 cmd_locations = [args["youtube_dl_location"], args["ffmpeg_location"], args["ffprobe_location"]]
+if (args["local_cmds"]):
+    cmd_locations = ["./exec/youtube-dl", "./exec/ffmpeg", "./exec/ffprobe"]
 download_status = [args["download"], args["normalize"], args["monoize"]]
 metadata_file = args["metadata_file"]
 default_metadata = [args["default_artist"], args["default_album"]]
