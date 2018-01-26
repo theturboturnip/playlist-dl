@@ -22,20 +22,17 @@ parser.add_argument("--default-artist", type=str, help="Specify the default arti
 parser.add_argument("--default-album", type=str, help="Specify the default album. This can be selected quickly when creating metadata for videos.")
 
 parser.add_argument("--target-mean-volume", type=float, help="The target mean volume for normalization", default=-12.0)
+parser.add_argument("--legacy-norm", action="store_true", help="Use the old, more complex volume normalization")
 parser.add_argument("--debug", action="store_true", help="Show debug information about commands called")
 
-args = vars(parser.parse_args())
+args = parser.parse_args()
 
-playlist = args["playlist"]
-output_folders = [args["downloads_folder"], args["output_folder"]]
-cmd_locations = [args["youtube_dl_location"], args["ffmpeg_location"], args["ffprobe_location"]]
-if (args["local_cmds"]):
+output_folders = [args.downloads_folder, args.output_folder]
+cmd_locations = [args.youtube_dl_location, args.ffmpeg_location, args.ffprobe_location]
+if (args.local_cmds):
     cmd_locations = ["./exec/youtube-dl", "./exec/ffmpeg", "./exec/ffprobe"]
-download_status = [args["download"], args["normalize"], args["monoize"]]
-metadata_file = args["metadata_file"]
-default_metadata = [args["default_artist"], args["default_album"]]
-target_volume = args["target_mean_volume"]
-debug = args["debug"]
+download_status = [args.download, args.normalize, args.monoize]
+default_metadata = [args.default_artist, args.default_album]
 
-dl = lib.PlaylistDownloader(playlist, output_folders, cmd_locations, download_status, metadata_file, default_metadata, target_volume, debug)
+dl = lib.PlaylistDownloader(args.playlist, output_folders, cmd_locations, download_status, args.metadata_file, default_metadata, args.target_mean_volume, args.debug, args.legacy_norm)
 dl.run()

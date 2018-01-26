@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-import subprocess,json,sys,os,re,shutil
+import subprocess,json,sys,os,re,shutil,math,threading,Queue
 
 class PlaylistDownloader:
-    def __init__(self, playlist, output_folders=["./downloads","./playlist"], cmd_locations=["youtube-dl","ffmpeg","ffprobe"], download_status=["NEW", "NEW", "NONE"], metadata_file="", default_metadata=["Artist","Album"], target_volume=-12.0, debug = False):
+    def __init__(self, playlist, output_folders=["./downloads","./playlist"], cmd_locations=["youtube-dl","ffmpeg","ffprobe"], download_status=["NEW", "NEW", "NONE"], metadata_file="", default_metadata=["Artist","Album"], target_volume=-12.0, debug = False, legacy_norm = False):
         self.playlist = playlist
         self.downloads_folder = os.path.abspath(output_folders[0])
         self.output_folder = os.path.abspath(output_folders[1])
@@ -37,6 +37,7 @@ class PlaylistDownloader:
         self.target_mean_volume = target_volume
 
         self.debug = debug
+        self.legacy_norm = legacy_norm
 
     def create_dir(self,*args):
         to_create = os.path.join(*args)
@@ -198,26 +199,48 @@ class PlaylistDownloader:
                     self.metadata[id] == metadata
                 self.monoized_ids.add(id)
 
+    def threaded_download(self, ids, message_queue):
+        for id in ids:
+            self.download_video(id)
+            message_queue.put("did_one")
+        message_queue.put("done")
     def download_video(self, id):
         output_path = os.path.join(self.downloads_folder, id+".%(ext)s")
         if self.ffmpeg == "ffmpeg":
             self.call(self.youtube_dl, "-x", "--audio-format", "mp3", "-o", output_path, "--prefer-ffmpeg", "https://youtube.com/watch?v="+id)
         else:
             self.call(self.youtube_dl, "-x", "--audio-format", "mp3", "-o", output_path, "--prefer-ffmpeg", "--ffmpeg-location", self.ffmpeg, "https://youtube.com/watch?v="+id)
-    def normalize_video(self, id):
+            
+    def threaded_normalize(self, ids, message_queue):
+        video_metadatas = [] 
+        for id in ids:
+            video_metadatas.append(self.get_metadata(id))
+        for i in range(len(ids)):
+            self.normalize_video(ids[i], video_metadatas[i])
+            message_queue.put("did_one")
+        message_queue.put("done")
+    def normalize_video(self, id, video_metadata = None):
         in_path = os.path.join(self.downloads_folder, id+".mp3")
-        video_metadata = self.get_metadata(id)
+        if video_metadata == None:
+            video_metadata = self.get_metadata(id)
 
-        loudnorm_json = self.check_output(self.ffmpeg, "-i", in_path, "-af", "loudnorm=I="+str(self.target_mean_volume)+":TP=-1.5:LRA=11:print_format=json", "-f", "null", "-")
-        loudnorm_json = re.search(r"({(.*\n)+)+}", loudnorm_json).group(0).replace("\n","")
-        loudnorm_data = json.loads(loudnorm_json)
-        
+        if self.legacy_norm:
+            loudnorm_json = self.check_output(self.ffmpeg, "-i", in_path, "-af", "loudnorm=I="+str(self.target_mean_volume)+":TP=-1.5:LRA=11:print_format=json", "-f", "null", "-")
+            loudnorm_json = re.search(r"({(.*\n)+)+}", loudnorm_json).group(0).replace("\n","")
+            loudnorm_data = json.loads(loudnorm_json)
+        else:
+            volume_process_output =self.check_output(self.ffmpeg, "-i", in_path, "-af", "volumedetect", "-vn", "-sn", "-dn", "-f", "null", "-")
+            vol_regex = re.compile(r"mean_volume: (-?[0-9]+.[0-9]+) dB")
+            gain = self.target_mean_volume - float(vol_regex.search(volume_process_output).group(1))
 
         cmd = [self.ffmpeg, "-i", in_path, "-f", "lavfi", "-i", "aevalsrc=0|0:d=4", "-y"]
         
         filter_cmd  = "[0:0]silenceremove=1:0:-50dB:1:1:-50dB[start];"
         filter_cmd += "[start] [1:0] concat=n=2:v=0:a=1[middle];"
-        filter_cmd += "[middle]loudnorm=I="+str(self.target_mean_volume)+":TP=-1.5:LRA=11:measured_I="+str(loudnorm_data["input_i"])+":measured_LRA="+str(loudnorm_data["input_lra"])+":measured_TP="+str(loudnorm_data["input_tp"])+":measured_thresh="+str(loudnorm_data["input_thresh"])+":offset="+str(loudnorm_data["target_offset"])+":linear=true[out]"
+        if self.legacy_norm:
+            filter_cmd += "[middle]loudnorm=I="+str(self.target_mean_volume)+":TP=-1.5:LRA=11:measured_I="+str(loudnorm_data["input_i"])+":measured_LRA="+str(loudnorm_data["input_lra"])+":measured_TP="+str(loudnorm_data["input_tp"])+":measured_thresh="+str(loudnorm_data["input_thresh"])+":offset="+str(loudnorm_data["target_offset"])+":linear=true[out]"
+        else:
+            filter_cmd += "[middle]volume="+str(gain)+"dB[out]"
         cmd += ["-lavfi", filter_cmd]
 
         cmd += ["-metadata", "title="+video_metadata[u"title"]]
@@ -229,10 +252,19 @@ class PlaylistDownloader:
         cmd += ["-map", "[out]", out_path]
 
         self.call(*cmd)
-        
-    def monoize_video(self, id):
-        video_metadata = self.get_metadata(id)
+
+    def threaded_monoize(self, ids, message_queue):
+        video_metadatas = [] 
+        for id in ids:
+            video_metadatas.append(self.get_metadata(id))
+        for i in range(len(ids)):
+            self.monoize_video(ids[i], video_metadatas[i])
+            message_queue.put("did_one")
+        message_queue.put("done")
+    def monoize_video(self, id, video_metadata = None):
         in_path = os.path.join(self.normalized_folder, video_metadata["title"]+".mp3")
+        if video_metadata == None:
+            video_metadata = self.get_metadata(id)
 
         cmd = [self.ffmpeg, "-i", in_path, "-b:a", "256k", "-ac", "1", "-y"]
 
@@ -243,9 +275,7 @@ class PlaylistDownloader:
 
         self.call(*cmd)
 
-    def update_progress_bar(self, label, amount, max_amount, message, length = 80, fill = '█'):
-        #if message != "":
-            #print "\r"+message+' '*(length+100)
+    def update_progress_bar(self, label, amount, max_amount, length = 80, fill = '█'):
         if max_amount == 0:
             max_amount = 1
             amount = 1
@@ -254,6 +284,60 @@ class PlaylistDownloader:
         bar = fill * filled_length + '-' * (length - filled_length)
         sys.stdout.write('\r%s: |%s| %s%% Complete\r' % (label, bar, percent)) #, end = '\r')
         sys.stdout.flush()
+
+    def threaded_update_progress_bar(self, message_queue, thread_count, label, max_amount):
+        running_threads = thread_count
+        total_done = 0
+
+        while running_threads > 0 and total_done < max_amount:
+            message = message_queue.get()
+            if message == "done":
+                running_threads -= 1
+            elif message == "did_one":
+                total_done += 1
+                if not self.debug:
+                    self.update_progress_bar(label, total_done, max_amount)
+        self.update_progress_bar(label, 1, 1)
+
+    def thread_operation(self, function, data_collection, label, thread_count):
+        if len(data_collection) == 0:
+            if not self.debug:
+                print ""
+                self.update_progress_bar(label, 0, 0)
+            return
+        data_per_bucket = int(math.ceil(len(data_collection) * 1.0/thread_count))
+        buckets = []
+        current_bucket = []
+        data_index = 0
+        for data in data_collection:
+            if data_index % data_per_bucket == 0:
+                if data_index > 0:
+                    buckets.append(current_bucket)
+                current_bucket = []
+            current_bucket.append(data)
+            data_index += 1
+        if len(current_bucket) > 0:
+            buckets.append(current_bucket)
+            
+        message_queue = Queue.Queue()
+        threads = []
+        for bucket in buckets:
+            if len(bucket) > 0:
+                threads.append(threading.Thread(target=function, args=(self, bucket, message_queue)))
+        if not self.debug:
+            print ""
+            self.update_progress_bar(label, 0, len(data_collection))
+
+        message_thread = threading.Thread(target=PlaylistDownloader.threaded_update_progress_bar, args=(self, message_queue, thread_count, label, len(data_collection)))
+        message_thread.start()
+        for thread in threads:
+            thread.start()
+            
+        for thread in threads:
+            if thread.is_alive():
+                thread.join()
+        if message_thread.is_alive():
+            message_thread.join()
         
     def run(self):
         print "Getting list of videos in playlist..."
@@ -277,15 +361,15 @@ class PlaylistDownloader:
         elif self.normalize_videos == "ALL":
             self.to_normalize = self.downloaded_ids.union(self.to_download)
         else:
-            self.to_normalize = self.downloaded_ids.union(self.to_download) - self.normalized_ids
+            self.to_normalize = self.to_download.union(self.downloaded_ids.union(self.to_download) - self.normalized_ids)
 
         if self.monoize_videos == "NONE":
             self.to_monoize = set([])
         elif self.monoize_videos == "ALL":
             self.to_monoize = self.normalized_ids.union(self.to_normalize)
         else:
-            self.to_monoize = self.normalized_ids.union(self.to_normalize) - self.monoized_ids
-
+            self.to_monoize = self.to_normalize.union(self.normalized_ids.union(self.to_normalize) - self.monoized_ids)
+            
         print "Planning to download "+str(len(self.to_download))+" videos, normalize "+str(len(self.to_normalize))+" mp3s and monoize "+str(len(self.to_monoize))+" mp3s."
         if len(self.to_download) + len(self.to_normalize) + len(self.to_monoize) == 0:
             print "Nothing to do, quitting..."
@@ -303,40 +387,15 @@ class PlaylistDownloader:
         for id in self.playlist_ids:
             self.get_metadata(id)
         self.save_metadata()
-        
-        downloaded_videos = 0
-        if not self.debug:
-            print ""
-            self.update_progress_bar("Downloaded", downloaded_videos, len(self.to_download), "Downloading...")
-        for id in self.to_download:
-            self.download_video(id)
-            downloaded_videos += 1
-            if not self.debug:
-                self.update_progress_bar("Downloaded", downloaded_videos, len(self.to_download), self.get_metadata(id)[u"title"])
-            
-        normalized_videos = 0
-        if not self.debug:
-            print ""
-            self.update_progress_bar("Normalized", normalized_videos, len(self.to_normalize), "Normalizing...")
-        for id in self.to_normalize:
-            self.normalize_video(id)
-            normalized_videos += 1
-            if not self.debug:
-                self.update_progress_bar("Normalized", normalized_videos, len(self.to_normalize), self.get_metadata(id)[u"title"])
 
-        monoized_videos = 0
-        if not self.debug:
-            print ""
-            self.update_progress_bar("  Monoized", monoized_videos, len(self.to_monoize), "Monoizing...")
-        for id in self.to_monoize:
-            self.monoize_video(id)
-            monoized_videos += 1
+        try:
+            self.thread_operation(PlaylistDownloader.threaded_download, self.to_download, "Downloaded", 8)
+            self.thread_operation(PlaylistDownloader.threaded_normalize, self.to_normalize, "Normalized", 8)
+            self.thread_operation(PlaylistDownloader.threaded_monoize, self.to_monoize, "  Monoized", 8)
+        finally:
             if not self.debug:
-                self.update_progress_bar("  Monoized", monoized_videos, len(self.to_monoize), self.get_metadata(id)[u"title"])
-        if not self.debug:
-            print ""
-                
-        self.clean_up()
+                print "" 
+            self.clean_up()
 
     def clean_up(self):
         self.save_metadata()
