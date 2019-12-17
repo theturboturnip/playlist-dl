@@ -2,7 +2,7 @@
 import subprocess,json,sys,os,re,shutil,math,threading,Queue
 
 class PlaylistDownloader:
-    def __init__(self, playlist, output_folders=["./downloads","./playlist"], cmd_locations=["youtube-dl","ffmpeg","ffprobe"], download_status=["NEW", "NEW", "NONE"], metadata_file="", default_metadata=["Artist","Album"], target_volume=-12.0, debug = False, legacy_norm = False):
+    def __init__(self, playlist, output_folders=["./downloads","./playlist"], cmd_locations=["youtube-dl","ffmpeg","ffprobe"], download_status=["NEW", "NEW", "NONE"], metadata_file="", default_metadata=["Artist","Album"], target_volume=-12.0, debug = False, legacy_norm = False, infer_new_metadata = False, enable_silence_clip = True):
         self.playlist = playlist
         self.downloads_folder = os.path.abspath(output_folders[0])
         self.output_folder = os.path.abspath(output_folders[1])
@@ -16,6 +16,8 @@ class PlaylistDownloader:
         self.monoize_videos = download_status[2]
 
         self.metadata = {}
+        self.infer_new_metadata = infer_new_metadata
+        self.enable_silence_clip = enable_silence_clip
         if metadata_file != None:
             self.metadata_file = os.path.abspath(metadata_file)
             if (os.path.exists(self.metadata_file)):
@@ -33,6 +35,9 @@ class PlaylistDownloader:
             
         self.default_artist = default_metadata[0]
         self.default_album = default_metadata[1]
+        if self.infer_new_metadata:
+            self.default_artist = self.default_artist or "Default Artist"
+            self.default_album = self.default_album or "Default Album"
 
         self.target_mean_volume = target_volume
 
@@ -122,9 +127,14 @@ class PlaylistDownloader:
                 sys.exit(1)
 
             print "Getting metadata for video \""+video_name+"\""
-            title = self.get_input("\tTitle")
-            album = self.get_input("\tAlbum", default = self.default_album)
-            artist = self.get_input("\tArtist", default = self.default_artist)
+            if self.infer_new_metadata:
+                title = video_name
+                album = self.default_album
+                artist = self.default_artist
+            else:
+                title = self.get_input("\tTitle", default = video_name)
+                album = self.get_input("\tAlbum", default = self.default_album)
+                artist = self.get_input("\tArtist", default = self.default_artist)
             self.metadata[id] = { "title": title, "album": album, "artist": artist }
 
             self.update_temp_metadata()
@@ -210,7 +220,10 @@ class PlaylistDownloader:
             self.call(self.youtube_dl, "-x", "--audio-format", "mp3", "-o", output_path, "--prefer-ffmpeg", "https://youtube.com/watch?v="+id)
         else:
             self.call(self.youtube_dl, "-x", "--audio-format", "mp3", "-o", output_path, "--prefer-ffmpeg", "--ffmpeg-location", self.ffmpeg, "https://youtube.com/watch?v="+id)
-            
+
+    def make_mp3_path(self, folder, video_metadata):
+        return os.path.join(folder, video_metadata[u"title"].replace("/","_")+".mp3")
+        
     def threaded_normalize(self, ids, message_queue):
         video_metadatas = [] 
         for id in ids:
@@ -224,34 +237,42 @@ class PlaylistDownloader:
         if video_metadata == None:
             video_metadata = self.get_metadata(id)
 
-        if self.legacy_norm:
-            loudnorm_json = self.check_output(self.ffmpeg, "-i", in_path, "-af", "loudnorm=I="+str(self.target_mean_volume)+":TP=-1.5:LRA=11:print_format=json", "-f", "null", "-")
-            loudnorm_json = re.search(r"({(.*\n)+)+}", loudnorm_json).group(0).replace("\n","")
-            loudnorm_data = json.loads(loudnorm_json)
+        if os.path.isfile(in_path):
+            if self.legacy_norm:
+                loudnorm_json = self.check_output(self.ffmpeg, "-i", in_path, "-af", "loudnorm=I="+str(self.target_mean_volume)+":TP=-1.5:LRA=11:print_format=json", "-f", "null", "-")
+                loudnorm_json = re.search(r"({(.*\n)+)+}", loudnorm_json).group(0).replace("\n","")
+                loudnorm_data = json.loads(loudnorm_json)
+            else:
+                volume_process_output =self.check_output(self.ffmpeg, "-i", in_path, "-af", "volumedetect", "-vn", "-sn", "-dn", "-f", "null", "-")
+                vol_regex = re.compile(r"mean_volume: (-?[0-9]+.[0-9]+) dB")
+                gain = self.target_mean_volume - float(vol_regex.search(volume_process_output).group(1))
+                
+            cmd = [self.ffmpeg, "-i", in_path, "-f", "lavfi", "-i", "aevalsrc=0|0:d=4", "-y"]
+
+
+            if self.enable_silence_clip:
+                filter_cmd = "[0:0]silenceremove=1:0:-50dB:1:1:-50dB[start];"
+            else:
+                filter_cmd = "[0:0]acopy[start];"
+            filter_cmd += "[start] [1:0] concat=n=2:v=0:a=1[middle];"
+            if self.legacy_norm:
+                filter_cmd += "[middle]loudnorm=I="+str(self.target_mean_volume)+":TP=-1.5:LRA=11:measured_I="+str(loudnorm_data["input_i"])+":measured_LRA="+str(loudnorm_data["input_lra"])+":measured_TP="+str(loudnorm_data["input_tp"])+":measured_thresh="+str(loudnorm_data["input_thresh"])+":offset="+str(loudnorm_data["target_offset"])+":linear=true[out]"
+            else:
+                filter_cmd += "[middle]volume="+str(gain)+"dB[out]"
+            cmd += ["-lavfi", filter_cmd]
+
+            cmd += ["-metadata", "title="+video_metadata[u"title"]]
+            cmd += ["-metadata", "artist="+video_metadata[u"artist"]]
+            cmd += ["-metadata", "album="+video_metadata[u"album"]]
+            cmd += ["-metadata", "comment="+id]
+
+            out_path = self.make_mp3_path(self.normalized_folder, video_metadata)
+            cmd += ["-map", "[out]", out_path]
+
+            self.call(*cmd)
         else:
-            volume_process_output =self.check_output(self.ffmpeg, "-i", in_path, "-af", "volumedetect", "-vn", "-sn", "-dn", "-f", "null", "-")
-            vol_regex = re.compile(r"mean_volume: (-?[0-9]+.[0-9]+) dB")
-            gain = self.target_mean_volume - float(vol_regex.search(volume_process_output).group(1))
+            print("Error trying to normalize " + in_path + ", skipping")
 
-        cmd = [self.ffmpeg, "-i", in_path, "-f", "lavfi", "-i", "aevalsrc=0|0:d=4", "-y"]
-        
-        filter_cmd  = "[0:0]silenceremove=1:0:-50dB:1:1:-50dB[start];"
-        filter_cmd += "[start] [1:0] concat=n=2:v=0:a=1[middle];"
-        if self.legacy_norm:
-            filter_cmd += "[middle]loudnorm=I="+str(self.target_mean_volume)+":TP=-1.5:LRA=11:measured_I="+str(loudnorm_data["input_i"])+":measured_LRA="+str(loudnorm_data["input_lra"])+":measured_TP="+str(loudnorm_data["input_tp"])+":measured_thresh="+str(loudnorm_data["input_thresh"])+":offset="+str(loudnorm_data["target_offset"])+":linear=true[out]"
-        else:
-            filter_cmd += "[middle]volume="+str(gain)+"dB[out]"
-        cmd += ["-lavfi", filter_cmd]
-
-        cmd += ["-metadata", "title="+video_metadata[u"title"]]
-        cmd += ["-metadata", "artist="+video_metadata[u"artist"]]
-        cmd += ["-metadata", "album="+video_metadata[u"album"]]
-        cmd += ["-metadata", "comment="+id]
-
-        out_path = os.path.join(self.normalized_folder, video_metadata[u"title"]+".mp3")
-        cmd += ["-map", "[out]", out_path]
-
-        self.call(*cmd)
 
     def threaded_monoize(self, ids, message_queue):
         video_metadatas = [] 
@@ -262,18 +283,21 @@ class PlaylistDownloader:
             message_queue.put("did_one")
         message_queue.put("done")
     def monoize_video(self, id, video_metadata = None):
-        in_path = os.path.join(self.normalized_folder, video_metadata["title"]+".mp3")
+        in_path = self.make_mp3_path(self.normalized_folder, video_metadata)
         if video_metadata == None:
             video_metadata = self.get_metadata(id)
 
-        cmd = [self.ffmpeg, "-i", in_path, "-b:a", "256k", "-ac", "1", "-y"]
-
-        cmd += ["-map_metadata", "0"]
-        cmd += ["-metadata", "album="+video_metadata[u"album"]+" [Mono]"]
-        out_path = os.path.join(self.monoized_folder, video_metadata[u"title"]+".mp3")
-        cmd += [out_path]
-
-        self.call(*cmd)
+        if os.path.isfile(in_path):
+            cmd = [self.ffmpeg, "-i", in_path, "-b:a", "256k", "-ac", "1", "-y"]
+            
+            cmd += ["-map_metadata", "0"]
+            cmd += ["-metadata", "album="+video_metadata[u"album"]+" [Mono]"]
+            out_path = self.make_mp3_path(self.monoized_folder, video_metadata)
+            cmd += [out_path]
+            
+            self.call(*cmd)
+        else:
+            print("Error trying to monoize " + in_path + ", skipping")
 
     def update_progress_bar(self, label, amount, max_amount, length = 80, fill = '█'):
         if max_amount == 0:
