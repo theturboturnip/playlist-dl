@@ -27,6 +27,7 @@ parser.add_argument("--debug", action="store_true", help="Show debug information
 
 parser.add_argument("--infer-new-metadata", action="store_true")
 parser.add_argument("--disable-silence-clip", action="store_true")
+parser.add_argument("--identity-normalization", action="store_true")
 
 args = parser.parse_args()
 
@@ -37,5 +38,5 @@ if (args.local_cmds):
 download_status = [args.download, args.normalize, args.monoize]
 default_metadata = [args.default_artist, args.default_album]
 
-dl = lib.PlaylistDownloader(args.playlist, output_folders, cmd_locations, download_status, args.metadata_file, default_metadata, args.target_mean_volume, args.debug, args.legacy_norm, args.infer_new_metadata, enable_silence_clip=not args.disable_silence_clip)
+dl = lib.PlaylistDownloader(args.playlist, output_folders, cmd_locations, download_status, args.metadata_file, default_metadata, args.target_mean_volume, args.debug, args.legacy_norm, args.infer_new_metadata, enable_silence_clip=not args.disable_silence_clip, identity_normalization=args.identity_normalization)
 dl.run()

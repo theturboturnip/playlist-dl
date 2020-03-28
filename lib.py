@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-import subprocess,json,sys,os,re,shutil,math,threading,Queue
+import subprocess,json,sys,os,re,shutil,math,threading,queue
 
 class PlaylistDownloader:
-    def __init__(self, playlist, output_folders=["./downloads","./playlist"], cmd_locations=["youtube-dl","ffmpeg","ffprobe"], download_status=["NEW", "NEW", "NONE"], metadata_file="", default_metadata=["Artist","Album"], target_volume=-12.0, debug = False, legacy_norm = False, infer_new_metadata = False, enable_silence_clip = True):
+    def __init__(self, playlist, output_folders=["./downloads","./playlist"], cmd_locations=["youtube-dl","ffmpeg","ffprobe"], download_status=["NEW", "NEW", "NONE"], metadata_file="", default_metadata=["Artist","Album"], target_volume=-12.0, debug = False, legacy_norm = False, infer_new_metadata = False, enable_silence_clip = True, identity_normalization = False):
         self.playlist = playlist
         self.downloads_folder = os.path.abspath(output_folders[0])
         self.output_folder = os.path.abspath(output_folders[1])
@@ -18,6 +18,7 @@ class PlaylistDownloader:
         self.metadata = {}
         self.infer_new_metadata = infer_new_metadata
         self.enable_silence_clip = enable_silence_clip
+        self.identity_normalization = identity_normalization
         if metadata_file != None:
             self.metadata_file = os.path.abspath(metadata_file)
             if (os.path.exists(self.metadata_file)):
@@ -52,23 +53,23 @@ class PlaylistDownloader:
 
     def call(self, *args):
         if (self.debug):
-            print subprocess.list2cmdline(args)
-            print subprocess.call(args)
+            print(subprocess.list2cmdline(args))
+            print(subprocess.call(args))
         else:
             with open(os.devnull, "w") as devnull:
                 subprocess.call(args, stdout=devnull, stderr=devnull)
     def check_output(self, *args):
         if (self.debug):
-            print args
-            print subprocess.list2cmdline(args)
+            print(args)
+            print(subprocess.list2cmdline(args))
             try:
                 output = subprocess.check_output(args, stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
-                print output
+                print(output)
                 return output
             except subprocess.CalledProcessError as e:
-                print "ERROR"
+                print("ERROR")
                 output = e.output.decode(sys.stdout.encoding)
-                print output
+                print(output)
                 return output
         return subprocess.check_output(args, stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
 
@@ -83,7 +84,7 @@ class PlaylistDownloader:
         else:
             message += " (q to quit): "
 
-        user_input = raw_input(message.encode("utf-8")).strip()
+        user_input = input(message).strip()
         if is_boolean:
             if default == "" or default:
                 if len(user_input) > 0 and user_input[0] == 'n':
@@ -101,12 +102,12 @@ class PlaylistDownloader:
         if self.get_input("Delete file at "+path+" because ["+reason+"]?", is_boolean=True):
             os.remove(path)
     def files_in(self, path):
-        filenames = os.walk(path).next()[2]
+        filenames = next(os.walk(path))[2]
         filepaths = [ os.path.join(path,f) for f in filenames]
         return filepaths
 
     def save_metadata(self):
-        print "Saving metadata..."
+        print("Saving metadata...")
         if self.metadata_file != None:
             with open(self.metadata_file, "w") as f:
                 f.write(json.dumps(self.metadata))
@@ -121,12 +122,12 @@ class PlaylistDownloader:
             video_name = None
             for video in self.videos:
                 if video["id"] == id:
-                    video_name = video["title"].encode("utf-8")
+                    video_name = video["title"]
                     break
             if video_name == None:
                 sys.exit(1)
 
-            print "Getting metadata for video \""+video_name+"\""
+            print("Getting metadata for video \""+video_name+"\"")
             if self.infer_new_metadata:
                 title = video_name
                 album = self.default_album
@@ -217,12 +218,12 @@ class PlaylistDownloader:
     def download_video(self, id):
         output_path = os.path.join(self.downloads_folder, id+".%(ext)s")
         if self.ffmpeg == "ffmpeg":
-            self.call(self.youtube_dl, "-x", "--audio-format", "mp3", "-o", output_path, "--prefer-ffmpeg", "https://youtube.com/watch?v="+id)
+            self.call(self.youtube_dl, "-f", "bestaudio[ext=m4a]", "-x", "--audio-format", "mp3", "-o", output_path, "--prefer-ffmpeg", "https://youtube.com/watch?v="+id)
         else:
-            self.call(self.youtube_dl, "-x", "--audio-format", "mp3", "-o", output_path, "--prefer-ffmpeg", "--ffmpeg-location", self.ffmpeg, "https://youtube.com/watch?v="+id)
+            self.call(self.youtube_dl, "-f", "bestaudio[ext=m4a]", "-x", "--audio-format", "mp3", "-o", output_path, "--prefer-ffmpeg", "--ffmpeg-location", self.ffmpeg, "https://youtube.com/watch?v="+id)
 
     def make_mp3_path(self, folder, video_metadata):
-        return os.path.join(folder, video_metadata[u"title"].replace("/","_")+".mp3")
+        return os.path.join(folder, video_metadata["title"].replace("/","_").replace('"', "'")+".mp3")
         
     def threaded_normalize(self, ids, message_queue):
         video_metadatas = [] 
@@ -243,27 +244,33 @@ class PlaylistDownloader:
                 loudnorm_json = re.search(r"({(.*\n)+)+}", loudnorm_json).group(0).replace("\n","")
                 loudnorm_data = json.loads(loudnorm_json)
             else:
-                volume_process_output =self.check_output(self.ffmpeg, "-i", in_path, "-af", "volumedetect", "-vn", "-sn", "-dn", "-f", "null", "-")
-                vol_regex = re.compile(r"mean_volume: (-?[0-9]+.[0-9]+) dB")
-                gain = self.target_mean_volume - float(vol_regex.search(volume_process_output).group(1))
+                if self.identity_normalization:
+                    gain = 0
+                else:
+                    volume_process_output =self.check_output(self.ffmpeg, "-i", in_path, "-af", "volumedetect", "-vn", "-sn", "-dn", "-f", "null", "-")
+                    vol_regex = re.compile(r"mean_volume: (-?[0-9]+.[0-9]+) dB")
+                    gain = self.target_mean_volume - float(vol_regex.search(volume_process_output).group(1))
                 
             cmd = [self.ffmpeg, "-i", in_path, "-f", "lavfi", "-i", "aevalsrc=0|0:d=4", "-y"]
 
 
             if self.enable_silence_clip:
-                filter_cmd = "[0:0]silenceremove=1:0:-50dB:1:1:-50dB[start];"
+                filter_cmd = "[0:0]silenceremove=1:0:-50dB:0:0:0,aformat=dblp,areverse,silenceremove=1:0:-50dB:0:0:0,aformat=dblp,areverse[start];"
             else:
                 filter_cmd = "[0:0]acopy[start];"
             filter_cmd += "[start] [1:0] concat=n=2:v=0:a=1[middle];"
             if self.legacy_norm:
                 filter_cmd += "[middle]loudnorm=I="+str(self.target_mean_volume)+":TP=-1.5:LRA=11:measured_I="+str(loudnorm_data["input_i"])+":measured_LRA="+str(loudnorm_data["input_lra"])+":measured_TP="+str(loudnorm_data["input_tp"])+":measured_thresh="+str(loudnorm_data["input_thresh"])+":offset="+str(loudnorm_data["target_offset"])+":linear=true[out]"
             else:
-                filter_cmd += "[middle]volume="+str(gain)+"dB[out]"
+                if gain == 0:
+                    filter_cmd += "[middle]aformat=dblp,acopy[out]"
+                else:
+                    filter_cmd += "[middle]volume="+str(gain)+"dB[out]"
             cmd += ["-lavfi", filter_cmd]
 
-            cmd += ["-metadata", "title="+video_metadata[u"title"]]
-            cmd += ["-metadata", "artist="+video_metadata[u"artist"]]
-            cmd += ["-metadata", "album="+video_metadata[u"album"]]
+            cmd += ["-metadata", "title="+video_metadata["title"]]
+            cmd += ["-metadata", "artist="+video_metadata["artist"]]
+            cmd += ["-metadata", "album="+video_metadata["album"]]
             cmd += ["-metadata", "comment="+id]
 
             out_path = self.make_mp3_path(self.normalized_folder, video_metadata)
@@ -291,7 +298,7 @@ class PlaylistDownloader:
             cmd = [self.ffmpeg, "-i", in_path, "-b:a", "256k", "-ac", "1", "-y"]
             
             cmd += ["-map_metadata", "0"]
-            cmd += ["-metadata", "album="+video_metadata[u"album"]+" [Mono]"]
+            cmd += ["-metadata", "album="+video_metadata["album"]+" [Mono]"]
             out_path = self.make_mp3_path(self.monoized_folder, video_metadata)
             cmd += [out_path]
             
@@ -326,7 +333,7 @@ class PlaylistDownloader:
     def thread_operation(self, function, data_collection, label, thread_count):
         if len(data_collection) == 0:
             if not self.debug:
-                print ""
+                print("")
                 self.update_progress_bar(label, 0, 0)
             return
         data_per_bucket = int(math.ceil(len(data_collection) * 1.0/thread_count))
@@ -343,13 +350,13 @@ class PlaylistDownloader:
         if len(current_bucket) > 0:
             buckets.append(current_bucket)
             
-        message_queue = Queue.Queue()
+        message_queue = queue.Queue()
         threads = []
         for bucket in buckets:
             if len(bucket) > 0:
                 threads.append(threading.Thread(target=function, args=(self, bucket, message_queue)))
         if not self.debug:
-            print ""
+            print("")
             self.update_progress_bar(label, 0, len(data_collection))
 
         message_thread = threading.Thread(target=PlaylistDownloader.threaded_update_progress_bar, args=(self, message_queue, thread_count, label, len(data_collection)))
@@ -364,13 +371,13 @@ class PlaylistDownloader:
             message_thread.join()
         
     def run(self):
-        print "Getting list of videos in playlist..."
+        print("Getting list of videos in playlist...")
         self.videos = self.get_videos_in_playlist()
         self.playlist_ids = set([])
         for video in self.videos:
             self.playlist_ids.add(video["id"])
 
-        print "Cleaning up music and inferring metadata..."
+        print("Cleaning up music and inferring metadata...")
         self.clean_and_scan_folders()
             
         if self.download_videos == "NONE":
@@ -394,17 +401,17 @@ class PlaylistDownloader:
         else:
             self.to_monoize = self.to_normalize.union(self.normalized_ids.union(self.to_normalize) - self.monoized_ids)
             
-        print "Planning to download "+str(len(self.to_download))+" videos, normalize "+str(len(self.to_normalize))+" mp3s and monoize "+str(len(self.to_monoize))+" mp3s."
+        print("Planning to download "+str(len(self.to_download))+" videos, normalize "+str(len(self.to_normalize))+" mp3s and monoize "+str(len(self.to_monoize))+" mp3s.")
         if len(self.to_download) + len(self.to_normalize) + len(self.to_monoize) == 0:
-            print "Nothing to do, quitting..."
+            print("Nothing to do, quitting...")
             self.clean_up()
         if (self.debug):
-            print "Downloading: "
-            print self.to_download
-            print "Normalizing: "
-            print self.to_normalize
-            print "Monoizing: "
-            print self.to_monoize
+            print("Downloading: ")
+            print(self.to_download)
+            print("Normalizing: ")
+            print(self.to_normalize)
+            print("Monoizing: ")
+            print(self.to_monoize)
         if not self.get_input("Continue?", is_boolean=True):
             self.clean_up()
 
@@ -418,7 +425,7 @@ class PlaylistDownloader:
             self.thread_operation(PlaylistDownloader.threaded_monoize, self.to_monoize, "  Monoized", 8)
         finally:
             if not self.debug:
-                print "" 
+                print("")
             self.clean_up()
 
     def clean_up(self):
